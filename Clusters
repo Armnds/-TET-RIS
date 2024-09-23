@@ -1,0 +1,133 @@
+import numpy as np
+from sklearn.cluster import KMeans
+import cv2
+import os
+import json
+
+# Material database (Example format)
+material_db = {
+    "materials": ["aluminum", "wood", "plastic"],
+    "thickness_ranges": {"aluminum": [(1, 5), (5, 10)], "wood": [(5, 10), (10, 20)], "plastic": [(1, 3), (3, 5)]},
+    "dimension_ranges": {"aluminum": [(50, 100), (100, 150)], "wood": [(100, 200)], "plastic": [(50, 80)]},
+    "images": {"aluminum": [], "wood": [], "plastic": []}  # Stores paths to material images
+}
+
+# Function to save the database
+def save_material_db(db, filename='material_db.json'):
+    with open(filename, 'w') as f:
+        json.dump(db, f, indent=4)
+
+# Function to load the database
+def load_material_db(filename='material_db.json'):
+    with open(filename, 'r') as f:
+        return json.load(f)
+
+# Step 4: Clustering based on Material, Thickness Range, and Size Range
+
+def get_range(value, ranges):
+    """Return the range to which a value belongs."""
+    for r in ranges:
+        if r[0] <= value < r[1]:
+            return r
+    return None
+
+def cluster_materials(materials, thicknesses, dimensions):
+    # Step 1: Cluster materials by type
+    material_types = list(set(materials))
+    print(f"Material types: {material_types}")
+    
+    # Step 2: Assign materials to thickness ranges
+    for material in material_types:
+        thickness_ranges = material_db["thickness_ranges"].get(material, [])
+        for thickness in thicknesses[material]:
+            t_range = get_range(thickness, thickness_ranges)
+            print(f"{material} thickness {thickness}cm belongs to range: {t_range}")
+    
+    # Step 3: Assign materials to dimension ranges
+    for material in material_types:
+        dimension_ranges = material_db["dimension_ranges"].get(material, [])
+        for dimension in dimensions[material]:
+            d_range = get_range(dimension[0], dimension_ranges)  # We are clustering by the first dimension
+            print(f"{material} dimension {dimension}cm belongs to range: {d_range}")
+
+# Example call
+materials = ["aluminum", "wood", "plastic"]
+thicknesses = {"aluminum": [4, 9], "wood": [7, 15], "plastic": [2.5, 4.5]}
+dimensions = {"aluminum": [(70, 30), (130, 50)], "wood": [(150, 100)], "plastic": [(60, 30)]}
+cluster_materials(materials, thicknesses, dimensions)
+
+# Step 5: Material Detection using Image Comparison
+
+def load_images_from_folder(folder):
+    images = []
+    for filename in os.listdir(folder):
+        img = cv2.imread(os.path.join(folder, filename))
+        if img is not None:
+            images.append(img)
+    return images
+
+def compare_images(img1, img2):
+    # Convert to grayscale
+    img1_gray = cv2.cvtColor(img1, cv2.COLOR_BGR2GRAY)
+    img2_gray = cv2.cvtColor(img2, cv2.COLOR_BGR2GRAY)
+    
+    # Compare histograms
+    hist1 = cv2.calcHist([img1_gray], [0], None, [256], [0, 256])
+    hist2 = cv2.calcHist([img2_gray], [0], None, [256], [0, 256])
+    
+    # Use correlation method for comparison
+    comparison = cv2.compareHist(hist1, hist2, cv2.HISTCMP_CORREL)
+    return comparison > 0.9  # Return True if images are similar enough
+
+def detect_material(image_path, material_db):
+    new_img = cv2.imread(image_path)
+    
+    for material, images in material_db["images"].items():
+        for img_path in images:
+            existing_img = cv2.imread(img_path)
+            if compare_images(new_img, existing_img):
+                print(f"Detected Material: {material}")
+                return material
+    
+    print("Unknown material detected")
+    return None
+
+# Step 6: Adding New Material to Database
+
+def add_new_material(material_db, material_name, thickness, dimensions, image_path):
+    thickness_range = get_range(thickness, material_db["thickness_ranges"].get(material_name, []))
+    dimension_range = get_range(dimensions[0], material_db["dimension_ranges"].get(material_name, []))  # First dimension
+
+    if material_name not in material_db["materials"]:
+        material_db["materials"].append(material_name)
+        material_db["thickness_ranges"][material_name] = [thickness_range]
+        material_db["dimension_ranges"][material_name] = [dimension_range]
+        material_db["images"][material_name] = [image_path]
+    else:
+        if thickness_range and thickness_range not in material_db["thickness_ranges"][material_name]:
+            material_db["thickness_ranges"][material_name].append(thickness_range)
+        if dimension_range and dimension_range not in material_db["dimension_ranges"][material_name]:
+            material_db["dimension_ranges"][material_name].append(dimension_range)
+        material_db["images"][material_name].append(image_path)
+    
+    print(f"{material_name} added to the database")
+
+# Example workflow for new material detection
+new_material_img_path = "path_to_new_material_image.jpg"
+detected_material = detect_material(new_material_img_path, material_db)
+
+if detected_material:
+    # Add the new material details if detected
+    new_thickness = 5  # Example values
+    new_dimensions = (70, 30)
+    add_new_material(material_db, detected_material, new_thickness, new_dimensions, new_material_img_path)
+else:
+    user_input = input("Do you want to add this as a new material? (yes/no): ")
+    if user_input.lower() == "yes":
+        new_material_name = input("Enter new material name: ")
+        new_thickness = int(input("Enter material thickness (in cm): "))
+        new_dimensions = tuple(map(int, input("Enter material dimensions (e.g., 70 30 for 70cm x 30cm): ").split()))
+        add_new_material(material_db, new_material_name, new_thickness, new_dimensions, new_material_img_path)
+
+# Save the updated database
+save_material_db(material_db)
