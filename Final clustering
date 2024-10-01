@@ -1,0 +1,148 @@
+import numpy as np
+import os
+import pandas as pd
+from PIL import Image
+import cv2  # OpenCV for image processing
+from skimage.metrics import structural_similarity as ssim  # SSIM for image comparison
+
+# Paths to folders
+folder = r"C:\Users\arian\Downloads\CORE Group\-TET-RIS\New_materials"
+main_resource_folder = r"C:\Users\arian\Downloads\CORE Group\-TET-RIS\Material"
+output_folder = r"C:\Users\arian\Downloads\CORE Group\-TET-RIS\ClusteredImages"
+csv_file = r"C:\Users\arian\Downloads\CORE Group\-TET-RIS\thickness_data.csv"
+
+# Step 1: Load CSV file
+def load_thickness_data(csv_file):
+    df = pd.read_csv(csv_file)
+    df.columns = df.columns.str.strip()
+    print("CSV columns after stripping:", df.columns)
+
+    if 'filename' not in df.columns or 'thickness' not in df.columns:
+        raise KeyError(f"CSV must contain 'filename' and 'thickness' columns. Found: {df.columns}")
+
+    thickness_dict = dict(zip(df['filename'], df['thickness']))
+    return thickness_dict
+
+# Step 2: Load images from a folder (including subfolders)
+def image_folder(folder):
+    images = []
+    filenames = []
+    material_types = []
+
+    # Iterate through every subfolder in the main_resource_folder
+    for material_type in os.listdir(folder):
+        material_folder_path = os.path.join(folder, material_type)
+
+        if os.path.isdir(material_folder_path):
+            for filename in os.listdir(material_folder_path):
+                if filename.endswith(".png"):
+                    filepath = os.path.join(material_folder_path, filename)
+                    img = Image.open(filepath)
+
+                    # Convert image to grayscale for feature matching
+                    img = np.array(img.convert('L'))  # Convert to grayscale
+                    img = cv2.resize(img, (300, 300))  # Resize image to standard size
+
+                    # Log the image shape after loading and converting to grayscale
+                    print(f"Loaded image: {filename}, shape: {img.shape}, from folder: {material_type}")
+
+                    images.append(img)
+                    filenames.append(filename)
+                    material_types.append(material_type)
+
+    return images, filenames, material_types
+
+# Step 3: Compare images using SSIM
+def compare_image_ssim(image1, image2):
+    """Compare two images using SSIM (Structural Similarity Index)."""
+    score, diff = ssim(image1, image2, full=True)
+    
+    # Print the SSIM score between the two images
+    print(f"SSIM similarity score: {score}")
+    return score
+
+# Step 4: Group and cluster images
+def group_images_by_comparison(main_images, main_material_types, material_images, filenames, thickness_dict, threshold=0.7):
+    folder_image_counts = {}
+
+    for material_img, material_filename in zip(material_images, filenames):
+        best_score = -1
+        best_match_material = None
+
+        # Compare material image with each main reference image
+        for main_img, main_material_type in zip(main_images, main_material_types):
+            score = compare_image_ssim(main_img, material_img)
+            print(f"Comparing {material_filename} with {main_material_type}, SSIM similarity score: {score}")
+
+            if score > best_score:
+                best_score = score
+                best_match_material = main_material_type
+
+        # Print the best score found for this image
+        print(f"Best score for {material_filename}: {best_score}")
+
+        # If the best score is too low, mark as unknown
+        if best_score < threshold:
+            print(f"No match found for {material_filename}, best score: {best_score}. Saving as 'unknown'.")
+            best_match_material = "unknown"
+
+        # Get the thickness from the CSV file
+        thickness = thickness_dict.get(material_filename, "unknown")
+        print(f"Thickness for {material_filename}: {thickness}")
+
+        # Determine thickness cluster
+        if isinstance(thickness, (int, float)):
+            if 10 <= thickness <= 14:
+                thickness_cluster = "10-14mm"
+            elif 16 <= thickness <= 20:
+                thickness_cluster = "16-20mm"
+            elif 20 <= thickness <= 24:
+                thickness_cluster = "20-24mm"
+            else:
+                thickness_cluster = "other"
+        else:
+            thickness_cluster = "unknown"
+
+        # Create folder path based on material and thickness
+        material_thickness_key = f"{best_match_material}/{thickness_cluster}"
+        folder_path = os.path.join(output_folder, material_thickness_key)
+
+        # Ensure the folder exists
+        if not os.path.exists(folder_path):
+            os.makedirs(folder_path)
+            print(f"Folder created: {folder_path}")
+            folder_image_counts[material_thickness_key] = 0  # Initialize the count
+
+        # Save the image in the corresponding folder
+        img_save_path = os.path.join(folder_path, material_filename)
+        Image.fromarray(material_img).save(img_save_path)
+        print(f"Image saved: {img_save_path}")
+        folder_image_counts[material_thickness_key] += 1  # Increment the image count
+
+    return folder_image_counts
+
+# Step 5: Main function to load and process the images
+def load_and_cluster_images(main_resource_folder, material_folder, csv_file):
+    thickness_dict = load_thickness_data(csv_file)
+
+    # Load all reference images from the main resource folder (including subfolders)
+    main_images, main_filenames, main_material_types = image_folder(main_resource_folder)
+
+    # Load the new material images to be clustered
+    material_images, material_filenames, _ = image_folder(material_folder)
+
+    # Compare and cluster the images
+    folder_image_counts = group_images_by_comparison(
+        main_images, main_material_types, material_images, material_filenames, thickness_dict
+    )
+
+    # Print the number of images clustered in each material folder
+    print("\nNumber of images clustered in each folder:")
+    if folder_image_counts:
+        for folder, count in folder_image_counts.items():
+            print(f"{folder}: {count} images")
+    else:
+        print("No images were clustered.")
+
+# Run the image clustering
+load_and_cluster_images(main_resource_folder, folder, csv_file)
