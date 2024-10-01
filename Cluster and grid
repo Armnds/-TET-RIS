@@ -1,0 +1,68 @@
+import numpy as np
+import os
+from PIL import Image
+import cv2
+from skimage.metrics import structural_similarity as compare_ssim
+
+# Existing materials folder
+material_folder = r"C:\Users\arian\Downloads\CORE Group\-TET-RIS\Material"
+
+def image_folder(folder):
+    images = []
+    thickness_values = []
+    filenames = []
+    material_types = []
+
+    for material_folder in os.listdir(folder):
+        material_folder_path = os.path.join(folder, material_folder)
+
+        for filename in os.listdir(material_folder_path):
+            if filename.endswith(".png"):  # Only process image files
+                filepath = os.path.join(material_folder_path, filename)
+                img = Image.open(filepath)
+                img = np.array(img)
+
+                # Split the filename to get material and thickness
+                name_part, thickness_str = filename.split("_")
+                thickness = int(thickness_str.replace("mm.png", ""))
+
+                images.append(img)
+                thickness_values.append(thickness)
+                filenames.append(filename)
+                material_types.append(material_folder)  # Store the material type (e.g., 'brick')
+
+    return images, thickness_values, material_types, filenames
+
+def load_images_from_folders(folder):
+    return image_folder(folder)
+
+def compare_image(image1, image2):
+    img1_gray = np.mean(image1, axis=2)
+    img2_gray = np.mean(image2, axis=2)
+    score, _ = compare_ssim(img1_gray, img2_gray, full=True)
+    return score
+
+def group_images_by_material_and_thickness(images, material_types, thickness_values, filenames):
+    grouped_images = {}
+
+    for img, material, thickness, filename in zip(images, material_types, thickness_values, filenames):
+        thickness_cluster = None
+        if 10 <= thickness <= 14:
+            thickness_cluster = "10-14mm"
+        elif 16 <= thickness <= 20:
+            thickness_cluster = "16-20mm"
+        elif 20 <= thickness <= 24:
+            thickness_cluster = "16-20mm"
+        else:
+            thickness_cluster = "other"
+
+        material_thickness_key = f"{material}_{thickness_cluster}"
+
+        if material_thickness_key not in grouped_images:
+            grouped_images[material_thickness_key] = []
+
+        grouped_images[material_thickness_key].append((filename, img))
+
+    return grouped_images
+
+
