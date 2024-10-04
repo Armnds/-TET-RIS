@@ -92,8 +92,8 @@ import cv2
 import numpy as np
 
 # Hardcoded paths
-FOLDER_PATH = r"C:\Users\berka\OneDrive\Desktop\CORE\tet-ris\irregular shapes 3"
-OUTPUT_PATH = r"C:\Users\berka\OneDrive\Desktop\CORE\tet-ris\outcome_polygons\outcome_vers11.png"
+FOLDER_PATH = r"C:\Users\Armand\OneDrive - Delft University of Technology\Uni\Masters\CORE\02.10 shapes"
+OUTPUT_PATH = r"C:\Users\Armand\OneDrive - Delft University of Technology\Uni\Masters\CORE\OUTPUT"
 
 def read_polygon_from_image(path):
     # Read the image
