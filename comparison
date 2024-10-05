@@ -1,0 +1,143 @@
+import os
+import numpy as np
+import pandas as pd
+from tensorflow.keras.applications import ResNet50
+from tensorflow.keras.applications.resnet50 import preprocess_input
+from tensorflow.keras.preprocessing import image
+from sklearn.metrics.pairwise import cosine_similarity
+import shutil  # For moving files
+
+# Load the pre-trained ResNet50 model
+model = ResNet50(weights='imagenet', include_top=False, pooling='avg')
+
+# Folder paths
+clean_images_folder = r'C:\Users\arian\Downloads\CORE Group\-TET-RIS\image_folder'
+input_images_folder = r'C:\Users\arian\Downloads\CORE Group\-TET-RIS\New_materials'
+output_folder = r'C:\Users\arian\Downloads\CORE Group\-TET-RIS\ClusteredImages'
+
+# Load CSV file for thickness data
+csv_file = r'C:\Users\arian\Downloads\CORE Group\-TET-RIS\thickness_data.csv'
+df_thickness = pd.read_csv(csv_file)
+
+# Ensure there are no leading/trailing spaces in the column names
+df_thickness.columns = df_thickness.columns.str.strip()
+
+# Convert the 'image_name' column in the CSV to lowercase for case-insensitive matching
+df_thickness['image_name'] = df_thickness['image_name'].str.lower()
+
+# Check if the 'image_name' column exists in the CSV
+if 'image_name' not in df_thickness.columns:
+    raise KeyError("The CSV file does not contain a column 'image_name'. Check the CSV headers.")
+
+# Threshold for detecting brick similarity
+SIMILARITY_THRESHOLD = 0.3  # Adjusted for better classification
+
+# Function to extract features from an image using ResNet50
+def extract_features(img_path, model):
+    img = image.load_img(img_path, target_size=(224, 224))
+    img_data = image.img_to_array(img)
+    img_data = np.expand_dims(img_data, axis=0)
+    img_data = preprocess_input(img_data)
+    features = model.predict(img_data)
+    return features.flatten()
+
+# Extract features for all clean images
+clean_image_features = {}
+for img_name in os.listdir(clean_images_folder):
+    if img_name.endswith('.jpg'):  # Only process .jpg clean images
+        img_path = os.path.join(clean_images_folder, img_name)
+        features = extract_features(img_path, model)
+        clean_image_features[img_name] = features
+        print(f"Extracted features for clean image: {img_name}")
+
+# Function to create a folder if it doesn't exist
+def create_folder_if_not_exists(folder_path):
+    if not os.path.exists(folder_path):
+        os.makedirs(folder_path)
+        print(f"Created folder: {folder_path}")
+    else:
+        print(f"Folder already exists: {folder_path}")
+
+# Function to classify images based on thickness
+def classify_image(thickness_value):
+    if 10 <= thickness_value <= 14:
+        folder = "10-14"
+    elif 14 < thickness_value <= 20:
+        folder = "14-20"
+    elif thickness_value > 20:
+        folder = "20+"
+    else:
+        folder = "other"
+    return folder
+
+# Function to recognize, classify, and move images based on similarity and thickness
+def recognize_and_classify(input_image_path, model, clean_image_features, df_thickness, output_folder):
+    print(f"Processing input image: {input_image_path}")
+    
+    # Extract features of the input image
+    input_features = extract_features(input_image_path, model)
+
+    # Compute cosine similarity between the input image and each clean image
+    similarities = {}
+    for img_name, features in clean_image_features.items():
+        similarity = cosine_similarity([input_features], [features])[0][0]
+        similarities[img_name] = similarity
+
+    # Find the most similar clean image
+    most_similar_image = max(similarities, key=similarities.get)
+    max_similarity = similarities[most_similar_image]
+
+    # Check if similarity exceeds the threshold
+    if max_similarity >= SIMILARITY_THRESHOLD:
+        print(f"Image {os.path.basename(input_image_path)} recognized as brick with similarity: {max_similarity:.2f}")
+        
+        # Get the input image name without removing the extension for matching thickness data
+        input_image_name = os.path.basename(input_image_path).lower()
+
+        # Debugging: Print the image name being searched
+        print(f"Looking for thickness data for image: {input_image_name}")
+
+        # Check for thickness data for the input image
+        thickness_row = df_thickness[df_thickness['image_name'] == input_image_name]
+
+        if thickness_row.empty:
+            print(f"No thickness data found for image: {input_image_name}")
+            return most_similar_image, max_similarity
+
+        thickness_value = thickness_row['thickness'].values[0]
+        print(f"Found thickness value: {thickness_value} for image: {input_image_name}")
+
+        # Classify the image based on its thickness and create appropriate folder
+        thickness_folder_name = classify_image(thickness_value)
+        thickness_folder = os.path.join(output_folder, f'brick/{thickness_folder_name}')
+        create_folder_if_not_exists(thickness_folder)
+
+        # Move the input image to the appropriate folder
+        new_image_name = os.path.basename(input_image_path)
+        new_image_path = os.path.join(thickness_folder, new_image_name)
+        
+        try:
+            shutil.move(input_image_path, new_image_path)
+            print(f"Moved {new_image_name} to {thickness_folder}")
+        except Exception as e:
+            print(f"Error moving file {new_image_name}: {e}")
+        
+        return most_similar_image, max_similarity
+    else:
+        print(f"Image {os.path.basename(input_image_path)} is not classified as brick (similarity: {max_similarity:.2f})")
+        return most_similar_image, max_similarity
+
+# Ensure the output folder exists
+create_folder_if_not_exists(output_folder)
+
+# Process all images in the input folder
+for img_name in os.listdir(input_images_folder):
+    # Process both .png and .jpg images
+    if img_name.endswith('.png') or img_name.endswith('.jpg'):
+        input_image_path = os.path.join(input_images_folder, img_name)
+        most_similar_image, max_similarity = recognize_and_classify(
+            input_image_path, model, clean_image_features, df_thickness, output_folder
+        )
+        print(f"Processed: {img_name} | Most similar: {most_similar_image} | Similarity: {max_similarity:.2f}")
+
+print("Image recognition, classification, and moving completed!")

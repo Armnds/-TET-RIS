@@ -1,0 +1,59 @@
+import os
+import numpy as np
+from tensorflow.keras.preprocessing import image
+from tensorflow.keras.applications.resnet50 import ResNet50, preprocess_input, decode_predictions
+
+# Load the pre-trained ResNet50 model
+model = ResNet50(weights='imagenet')
+
+# Path to your folder with brick images
+image_folder = r'C:\Users\arian\Downloads\image_folder'
+
+# List of related categories for bricks
+related_labels = ['brick', 'stone_wall', 'masonry', 'building', 'wall']
+
+# Function to classify an image and check if it's related to bricks
+def is_brick_image(img_path):
+    try:
+        # Load and preprocess the image
+        img = image.load_img(img_path, target_size=(224, 224))
+        img_array = image.img_to_array(img)
+        img_array = np.expand_dims(img_array, axis=0)
+        img_array = preprocess_input(img_array)
+
+        # Get predictions
+        predictions = model.predict(img_array)
+        decoded_preds = decode_predictions(predictions, top=5)[0]  # Get top 5 predictions
+
+        # Check if any prediction is related to brick or similar categories
+        for pred in decoded_preds:
+            label = pred[1].lower()  # The label of the predicted class
+            if any(related_label in label for related_label in related_labels):
+                return True  # Image is classified as brick or related
+
+        return False  # Not a brick image
+    except Exception as e:
+        print(f"Error processing {img_path}: {e}")
+        return False
+
+# Filter out non-brick images
+def filter_images(image_folder):
+    brick_images = []
+    non_brick_images = []
+
+    for filename in os.listdir(image_folder):
+        img_path = os.path.join(image_folder, filename)
+        if is_brick_image(img_path):
+            brick_images.append(filename)
+        else:
+            non_brick_images.append(filename)
+
+    # Optionally, you can delete or move the non-brick images
+    for non_brick_image in non_brick_images:
+        os.remove(os.path.join(image_folder, non_brick_image))  # This deletes the non-brick images
+
+    print(f"Total brick images: {len(brick_images)}")
+    print(f"Total non-brick images removed: {len(non_brick_images)}")
+
+# Run the filtering
+filter_images(image_folder)

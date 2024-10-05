@@ -1,0 +1,259 @@
+import os
+import numpy as np
+import pandas as pd
+from tensorflow.keras.applications import ResNet50
+from tensorflow.keras.applications.resnet50 import preprocess_input
+from tensorflow.keras.preprocessing import image
+from tensorflow.keras.models import Model
+from sklearn.metrics.pairwise import cosine_similarity
+from sklearn.preprocessing import normalize
+from sklearn.cluster import KMeans
+from scipy.spatial import distance  # For color distance calculations
+import shutil  # For moving files
+import cv2  # For image processing (color extraction)
+
+# Load the pre-trained ResNet50 model and extract features from a deeper layer (conv5_block3_out)
+model_resnet = ResNet50(weights='imagenet', include_top=False)
+model = Model(inputs=model_resnet.input, outputs=model_resnet.get_layer('conv5_block3_out').output)
+
+# Folder paths
+clean_images_folder = r'C:\Users\arian\Downloads\CORE Group\-TET-RIS\image_folder'
+non_brick_images_folder = r'C:\Users\arian\Downloads\CORE Group\-TET-RIS\non_brick_images'
+input_images_folder = r'C:\Users\arian\Downloads\CORE Group\-TET-RIS\New_materials'
+output_folder = r'C:\Users\arian\Downloads\CORE Group\-TET-RIS\ClusteredImages'
+
+# Load CSV file for thickness data
+csv_file = r'C:\Users\arian\Downloads\CORE Group\-TET-RIS\thickness_data.csv'
+df_thickness = pd.read_csv(csv_file)
+
+# Ensure there are no leading/trailing spaces in the column names
+df_thickness.columns = df_thickness.columns.str.strip()
+
+# Convert the 'image_name' column in the CSV to lowercase for case-insensitive matching
+df_thickness['image_name'] = df_thickness['image_name'].str.lower()
+
+# Lowered threshold for detecting brick similarity
+SIMILARITY_THRESHOLD = 0.1  # Experiment with lower thresholds
+
+# Weight for combining feature and color similarity
+FEATURE_WEIGHT = 0.7
+COLOR_WEIGHT = 0.3
+
+# Maximum possible Euclidean distance in RGB space
+MAX_COLOR_DISTANCE = 441.67  # Distance between [0, 0, 0] and [255, 255, 255]
+
+# Function to extract features from an image using deeper layers of ResNet50
+def extract_features(img_path, model):
+    img = image.load_img(img_path, target_size=(224, 224))
+    img_data = image.img_to_array(img)
+    img_data = np.expand_dims(img_data, axis=0)
+    img_data = preprocess_input(img_data)
+    features = model.predict(img_data)
+    features_flat = features.flatten()
+
+    # Normalize the feature vector
+    features_normalized = normalize([features_flat])[0]
+    
+    return features_normalized
+
+# Function to calculate cosine similarity
+def cosine_similarity_custom(feature1, feature2):
+    return cosine_similarity([feature1], [feature2])[0][0]
+
+# Function to extract the dominant color from an image using KMeans clustering
+def extract_dominant_color(img_path, k=1):
+    img = cv2.imread(img_path)
+    img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)  # Convert from BGR to RGB
+    img = img.reshape((img.shape[0] * img.shape[1], 3))  # Reshape to a list of pixels
+    
+    # Apply K-means clustering to find the most dominant color
+    kmeans = KMeans(n_clusters=k)
+    kmeans.fit(img)
+    
+    # Get the dominant color (in RGB format)
+    dominant_color = kmeans.cluster_centers_[0]
+    
+    return dominant_color
+
+# Function to calculate normalized color similarity (in range 0 to 1) using Euclidean distance in RGB space
+def color_similarity(color1, color2):
+    color_distance = distance.euclidean(color1, color2)
+    normalized_similarity = 1 - (color_distance / MAX_COLOR_DISTANCE)  # Normalize the distance
+    return normalized_similarity
+
+# Extract features and dominant colors for all clean (brick) images
+clean_image_features = {}
+clean_image_colors = {}
+for img_name in os.listdir(clean_images_folder):
+    if img_name.endswith('.jpg'):  # Only process .jpg clean images
+        img_path = os.path.join(clean_images_folder, img_name)
+        
+        # Extract features
+        features = extract_features(img_path, model)
+        clean_image_features[img_name] = features
+        
+        # Extract dominant color
+        dominant_color = extract_dominant_color(img_path)
+        clean_image_colors[img_name] = dominant_color
+
+        print(f"Extracted features and dominant color for clean image: {img_name}")
+
+# Check if the non-brick images folder exists and create it if it doesn't
+if not os.path.exists(non_brick_images_folder):
+    print(f"Folder {non_brick_images_folder} does not exist. Creating it...")
+    os.makedirs(non_brick_images_folder)
+    print(f"Created the folder: {non_brick_images_folder}")
+
+# Extract features and dominant colors for all non-brick images
+non_brick_image_features = {}
+non_brick_image_colors = {}
+for img_name in os.listdir(non_brick_images_folder):
+    if img_name.endswith('.jpg') or img_name.endswith('.png'):  # Add more formats if needed
+        img_path = os.path.join(non_brick_images_folder, img_name)
+        
+        # Extract features
+        features = extract_features(img_path, model)
+        non_brick_image_features[img_name] = features
+        
+        # Extract dominant color
+        dominant_color = extract_dominant_color(img_path)
+        non_brick_image_colors[img_name] = dominant_color
+
+        print(f"Extracted features and dominant color for non-brick image: {img_name}")
+
+if not non_brick_image_features:
+    print("Warning: No non-brick images were processed. Please check the non_brick_images_folder.")
+
+# Function to create a folder if it doesn't exist
+def create_folder_if_not_exists(folder_path):
+    if not os.path.exists(folder_path):
+        os.makedirs(folder_path)
+        print(f"Created folder: {folder_path}")
+    else:
+        print(f"Folder already exists: {folder_path}")
+
+# Function to classify images based on thickness
+def classify_image(thickness_value):
+    if 10 <= thickness_value <= 14:
+        folder = "10-14"
+    elif 14 < thickness_value <= 20:
+        folder = "14-20"
+    elif thickness_value > 20:
+        folder = "20+"
+    else:
+        folder = "other"
+    return folder
+
+# Function to recognize and classify images based on feature and color similarity
+def recognize_and_classify(input_image_path, model, clean_image_features, non_brick_image_features, clean_image_colors, non_brick_image_colors, df_thickness, output_folder):
+    print(f"\nProcessing input image: {input_image_path}")
+    
+    # Extract features and dominant color of the input image
+    input_features = extract_features(input_image_path, model)
+    input_dominant_color = extract_dominant_color(input_image_path)
+    
+    # Compute feature and color similarity with brick images
+    brick_similarities = {}
+    for img_name, features in clean_image_features.items():
+        # Feature similarity
+        feature_similarity = cosine_similarity_custom(input_features, features)
+        # Color similarity (normalized)
+        color_similarity_value = color_similarity(input_dominant_color, clean_image_colors[img_name])
+        # Combine feature and color similarity
+        combined_similarity = (FEATURE_WEIGHT * feature_similarity) + (COLOR_WEIGHT * color_similarity_value)
+        brick_similarities[img_name] = combined_similarity
+        print(f"Brick image: {img_name} | Combined Similarity: {combined_similarity:.2f}")
+
+    # Compute feature and color similarity with non-brick images
+    non_brick_similarities = {}
+    for img_name, features in non_brick_image_features.items():
+        # Feature similarity
+        feature_similarity = cosine_similarity_custom(input_features, features)
+        # Color similarity (normalized)
+        color_similarity_value = color_similarity(input_dominant_color, non_brick_image_colors[img_name])
+        # Combine feature and color similarity
+        combined_similarity = (FEATURE_WEIGHT * feature_similarity) + (COLOR_WEIGHT * color_similarity_value)
+        non_brick_similarities[img_name] = combined_similarity
+        print(f"Non-brick image: {img_name} | Combined Similarity: {combined_similarity:.2f}")
+
+    # Find the most similar brick and non-brick images
+    most_similar_brick_image = max(brick_similarities, key=brick_similarities.get, default=None)
+    max_brick_similarity = brick_similarities[most_similar_brick_image] if most_similar_brick_image else 0
+
+    most_similar_non_brick_image = max(non_brick_similarities, key=non_brick_similarities.get, default=None)
+    max_non_brick_similarity = non_brick_similarities[most_similar_non_brick_image] if most_similar_non_brick_image else 0
+
+    # Check if the input image is more similar to a brick or a non-brick image
+    if max_brick_similarity >= max_non_brick_similarity and max_brick_similarity >= SIMILARITY_THRESHOLD:
+        print(f"Image {os.path.basename(input_image_path)} recognized as brick with similarity: {max_brick_similarity:.2f}")
+
+        # Get the input image name without removing the extension for matching thickness data
+        input_image_name = os.path.basename(input_image_path).lower()
+
+        # Debugging: Print the image name being searched
+        print(f"Looking for thickness data for image: {input_image_name}")
+
+        # Check for thickness data for the input image
+        thickness_row = df_thickness[df_thickness['image_name'] == input_image_name]
+
+        if thickness_row.empty:
+            print(f"No thickness data found for image: {input_image_name}")
+            return most_similar_brick_image, max_brick_similarity
+
+        thickness_value = thickness_row['thickness'].values[0]
+        print(f"Found thickness value: {thickness_value} for image: {input_image_name}")
+
+        # Classify the image based on its thickness and create appropriate folder
+        thickness_folder_name = classify_image(thickness_value)
+        thickness_folder = os.path.join(output_folder, f'brick/{thickness_folder_name}')
+        create_folder_if_not_exists(thickness_folder)
+
+        # Move the input image to the appropriate folder
+        new_image_name = os.path.basename(input_image_path)
+        new_image_path = os.path.join(thickness_folder, new_image_name)
+        
+        try:
+            shutil.move(input_image_path, new_image_path)
+            print(f"Moved {new_image_name} to {thickness_folder}")
+        except Exception as e:
+            print(f"Error moving file {new_image_name}: {e}")
+        
+        return most_similar_brick_image, max_brick_similarity
+    elif max_non_brick_similarity >= SIMILARITY_THRESHOLD:
+        print(f"Image {os.path.basename(input_image_path)} classified as non-brick with similarity: {max_non_brick_similarity:.2f}")
+        
+        # Move non-brick images to a separate folder
+        non_brick_folder = os.path.join(output_folder, 'non-brick')
+        create_folder_if_not_exists(non_brick_folder)
+        new_image_name = os.path.basename(input_image_path)
+        new_image_path = os.path.join(non_brick_folder, new_image_name)
+        
+        try:
+            shutil.move(input_image_path, new_image_path)
+            print(f"Moved {new_image_name} to non-brick folder")
+        except Exception as e:
+            print(f"Error moving file {new_image_name}: {e}")
+        
+        return most_similar_non_brick_image, max_non_brick_similarity
+    else:
+        print(f"Image {os.path.basename(input_image_path)} not classified as brick or non-brick (similarity: {max(max_brick_similarity, max_non_brick_similarity):.2f})")
+        return None, 0.0  # Ensure the function returns a tuple even if no classification is made
+
+# Ensure the output folder exists
+create_folder_if_not_exists(output_folder)
+
+# Process all images in the input folder
+for img_name in os.listdir(input_images_folder):
+    if img_name.endswith('.png') or img_name.endswith('.jpg'):
+        input_image_path = os.path.join(input_images_folder, img_name)
+        most_similar_image, max_similarity = recognize_and_classify(
+            input_image_path, model, clean_image_features, non_brick_image_features, clean_image_colors, non_brick_image_colors, df_thickness, output_folder
+        )
+        
+        # Handle the case where no brick or non-brick classification was made
+        if most_similar_image is None:
+            print(f"No classification made for {img_name}.")
+        else:
+            print(f"Processed: {img_name} | Most similar: {most_similar_image} | Similarity: {max_similarity:.2f}")
+
+print("\nImage recognition, classification, and moving completed!")

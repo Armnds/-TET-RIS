@@ -1,2 +1,0 @@
-# -TET-RIS
-CORE
